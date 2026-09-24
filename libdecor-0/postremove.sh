@@ -65,7 +65,7 @@ if [ -x "${runner}" ] && command -v systemd-run >/dev/null 2>&1 && [ -d /run/sys
 		--unit=freshlibs-restore-libdecor \
 		--description='Freshlibs: restore the ALT libdecor' \
 		--on-active=10s \
-		/bin/sh "${runner}" ${pkgs} >/dev/null 2>&1; then
+		/bin/sh "${runner}" restore ${pkgs} >/dev/null 2>&1; then
 		echo "Freshlibs: через 10 секунд системные пакеты будут восстановлены: ${pkgs}"
 		echo "Freshlibs: ход восстановления — journalctl -u freshlibs-restore-libdecor"
 		exit 0

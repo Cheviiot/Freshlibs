@@ -17,7 +17,7 @@
 # Stapler repository documentation requires.
 name='libdecor-0'
 version=0.2.5
-release=3
+release=5
 # epoch guards our own upgrade path: any future release of this recipe
 # always sorts above a 0.x version published without an epoch. It does
 # NOT stop `apt-get upgrade` from pulling the system libdecor-0 back —
@@ -108,7 +108,7 @@ sources=(
 
 checksums=(
 	'sha256:39c109a9a7eae943ba34d18a282c447d5729f9c486c8bc05ea305e4acd341522'
-	'sha256:22d0aa002246cfe607af0c38a19c2f5027deff3669aa0b3b0b3f9bf4f494069e'
+	'sha256:80064c55d11c0acfea1ccd7f6998d6aab5c3096ad995e21859e9280415310aa8'
 )
 
 # preremove -> %preun, postinstall -> %post, postremove -> %postun.

@@ -1,8 +1,7 @@
 #!/bin/bash
 # Stapler maps this script to RPM %preun: it runs before the package's files
-# are removed, while the rpm database still describes the whole system. RPM
-# passes the number of instances that will remain: 0 on a real removal, 1 while
-# an upgrade erases the previous version.
+# are removed. RPM passes the number of instances that will remain: 0 on a real
+# removal, 1 while an upgrade erases the previous version.
 #
 # rpm runs scriptlets through /bin/sh regardless of this shebang, so nothing
 # here uses bash-only syntax. No `set -e` either: bookkeeping must never abort
@@ -16,67 +15,72 @@ fi
 
 state_dir=/var/lib/freshlibs
 list=${state_dir}/libdecor-restore.list
-runner_src=/usr/libexec/freshlibs/libdecor-restore
+helper=/usr/libexec/freshlibs/libdecor-restore
 runner=${state_dir}/libdecor-restore
 
 if [ -e /etc/freshlibs/no-auto-restore ]; then
+	rm -f "${list}" 2>/dev/null
 	echo "Freshlibs: автовосстановление отключено (/etc/freshlibs/no-auto-restore)."
 	echo "Freshlibs: после удаления в системе не останется libdecor — вернуть: apt-get install libdecor-0 libdecor-devel"
 	exit 0
 fi
 
-# Everything installed that transitively needs libdecor. `apt-get remove` on
-# this package takes that whole set down with it (measured on p11: mesa-gears
-# and xorg-xwayland directly, then gnome-session-wayland and i586-steam
-# through xorg-xwayland), so that set is exactly what has to come back.
-# Breadth-first over rpm's reverse dependencies; the depth cap guards against
-# a dependency cycle.
-found=""
-current='libdecor-0.so.0()(64bit)'
-depth=0
-while [ -n "${current}" ] && [ "${depth}" -lt 8 ]; do
-	depth=$((depth + 1))
-	next=""
-	for capability in ${current}; do
-		for pkg in $(rpm -q --whatrequires "${capability}" --qf '%{NAME}\n' 2>/dev/null); do
-			# Skip libdecor itself: this package and the ALT ones it replaces.
-			case "${pkg}" in
-			libdecor-0 | libdecor-devel | libdecor-0+stplr-*)
-				continue
-				;;
-			esac
-			case " ${found} " in
-			*" ${pkg} "*)
-				continue
-				;;
-			esac
-			found="${found}${pkg} "
-			next="${next}${pkg} "
-		done
-	done
-	current="${next}"
-done
+# `apt-get install libdecor-0 libdecor-devel` swaps this package for the ALT
+# one in a single transaction, and rpm performs installs before erasures — so
+# on that path the system libdecor is already back by now and there is nothing
+# to warn about or restore. A file check cannot tell the difference here, since
+# this package still owns /usr/lib64/libdecor-0.so.0 until rpm removes it.
+if rpm -q libdecor-0 >/dev/null 2>&1; then
+	rm -f "${list}" 2>/dev/null
+	rmdir "${state_dir}" 2>/dev/null
+	exit 0
+fi
 
 if ! mkdir -p "${state_dir}" 2>/dev/null; then
 	echo "Freshlibs: не удалось создать ${state_dir}, автовосстановление не сработает." >&2
 	exit 0
 fi
 
-printf 'libdecor-0 libdecor-devel %s\n' "${found}" >"${list}" 2>/dev/null || {
+# %post recorded the set of libdecor consumers while the system was intact;
+# that recording is the one that matters, because `apt-get remove` erases those
+# packages before this scriptlet gets to run. A fresh scan is merged in anyway,
+# to pick up anything installed after the last upgrade that rpm has not erased
+# yet in this transaction.
+recorded=""
+if [ -r "${list}" ]; then
+	recorded=$(cat "${list}" 2>/dev/null)
+fi
+
+fresh=""
+if [ -x "${helper}" ]; then
+	fresh=$("${helper}" consumers 2>/dev/null)
+fi
+
+merged=""
+for pkg in libdecor-0 libdecor-devel ${recorded} ${fresh}; do
+	case " ${merged} " in
+	*" ${pkg} "*)
+		continue
+		;;
+	esac
+	merged="${merged}${pkg} "
+done
+
+printf '%s\n' "${merged}" >"${list}" 2>/dev/null || {
 	echo "Freshlibs: не удалось записать ${list}, автовосстановление не сработает." >&2
 	exit 0
 }
 
-# The runner must outlive this package's own files, which rpm removes next.
-if [ -r "${runner_src}" ]; then
-	cp -f "${runner_src}" "${runner}" 2>/dev/null && chmod 755 "${runner}" 2>/dev/null
+# The helper must outlive this package's own files, which rpm removes next.
+if [ -r "${helper}" ]; then
+	cp -f "${helper}" "${runner}" 2>/dev/null && chmod 755 "${runner}" 2>/dev/null
 fi
 
 cat <<MSG
 Freshlibs: этот пакет заменяет системный libdecor, поэтому его удаление
 оставляет систему без libdecor вообще. После завершения операции будут
 восстановлены системные пакеты:
-    libdecor-0 libdecor-devel ${found}
+    ${merged}
 Вернуться на системную версию без этого круга можно одной командой —
 она делает обмен в одной транзакции и ничего не ломает:
     apt-get install libdecor-0 libdecor-devel

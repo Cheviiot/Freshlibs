@@ -1,14 +1,17 @@
 #!/bin/sh
-# Deferred restore of the ALT libdecor after this Freshlibs package has been
-# removed.
+# Helper for keeping the system consistent around this Freshlibs package.
 #
-# Started by the package's %postun through a transient systemd unit, because an
-# rpm scriptlet runs inside the rpm transaction and holds the rpm database
-# lock: apt cannot be called from there at all. By the time this runs the
-# transaction is over and apt is usable again.
+#   libdecor-restore consumers      print installed packages that need libdecor
+#   libdecor-restore restore PKG... reinstall the given packages
 #
-# Package names to restore are passed as arguments. The script lives in
-# /var/lib/freshlibs because the package's own files are already gone.
+# `consumers` is called from %post and %preun to record what has to come back
+# if this package is ever removed. `restore` is started from %postun through a
+# transient systemd unit: an rpm scriptlet runs inside the rpm transaction and
+# holds the rpm database lock, so it cannot call apt at all.
+#
+# The script lives both in the package (/usr/libexec/freshlibs) and, copied by
+# %preun, in /var/lib/freshlibs — by the time `restore` runs, the package's own
+# files are already gone.
 set -u
 
 state_dir=/var/lib/freshlibs
@@ -17,63 +20,114 @@ self=${state_dir}/libdecor-restore
 
 log() { echo "Freshlibs libdecor-restore: $*"; }
 
-if [ "$#" -eq 0 ]; then
-	log "нечего восстанавливать"
-	exit 0
-fi
+# Breadth-first walk over rpm's reverse dependencies, starting from libdecor's
+# soname. The depth cap guards against a dependency cycle.
+consumers() {
+	found=""
+	current='libdecor-0.so.0()(64bit)'
+	depth=0
 
-# Drop whatever survived the removal. This check belongs here and not in the
-# %postun that scheduled this run: inside an rpm transaction the erase order is
-# undefined, so a package apt was about to remove could still look installed.
-wanted=""
-for pkg in "$@"; do
-	if rpm -q "${pkg}" >/dev/null 2>&1; then
-		continue
+	while [ -n "${current}" ] && [ "${depth}" -lt 8 ]; do
+		depth=$((depth + 1))
+		next=""
+		for capability in ${current}; do
+			for pkg in $(rpm -q --whatrequires "${capability}" --qf '%{NAME}\n' 2>/dev/null); do
+				# Skip libdecor itself: this package and the ALT ones it replaces.
+				case "${pkg}" in
+				libdecor-0 | libdecor-devel | libdecor-0+stplr-*)
+					continue
+					;;
+				esac
+				case " ${found} " in
+				*" ${pkg} "*)
+					continue
+					;;
+				esac
+				found="${found}${pkg} "
+				next="${next}${pkg} "
+			done
+		done
+		current="${next}"
+	done
+
+	printf '%s' "${found}"
+}
+
+restore() {
+	if [ "$#" -eq 0 ]; then
+		log "нечего восстанавливать"
+		return 0
 	fi
-	wanted="${wanted}${pkg} "
-done
 
-if [ -z "${wanted}" ]; then
-	log "все пакеты на месте, восстанавливать нечего"
-	rm -f "${list}" "${self}"
-	rmdir "${state_dir}" 2>/dev/null
-	exit 0
-fi
+	# Drop whatever survived the removal. This check belongs here and not in
+	# the %postun that scheduled this run: inside an rpm transaction the erase
+	# order is undefined, so a package apt was about to remove could still look
+	# installed from a scriptlet.
+	wanted=""
+	for pkg in "$@"; do
+		if rpm -q "${pkg}" >/dev/null 2>&1; then
+			continue
+		fi
+		wanted="${wanted}${pkg} "
+	done
 
-# shellcheck disable=SC2086 # deliberate word splitting of the package list
-set -- ${wanted}
-
-# apt may still be finishing the transaction that removed the package.
-attempt=0
-while [ "${attempt}" -lt 10 ]; do
-	attempt=$((attempt + 1))
-	if LC_ALL=C apt-get -s install "$@" >/dev/null 2>&1; then
-		break
+	if [ -z "${wanted}" ]; then
+		log "все пакеты на месте, восстанавливать нечего"
+		rm -f "${list}" "${self}"
+		rmdir "${state_dir}" 2>/dev/null
+		return 0
 	fi
-	sleep 3
-done
 
-if ! plan=$(LC_ALL=C apt-get -s install "$@" 2>&1); then
-	log "apt не смог построить план восстановления:"
-	printf '%s\n' "${plan}"
-	log "восстановите вручную: apt-get install $*"
-	exit 0
-fi
+	# shellcheck disable=SC2086 # deliberate word splitting of the package list
+	set -- ${wanted}
 
-# An automatic restore must never remove anything: if apt's plan touches other
-# packages, stop and leave the decision to a human.
-if printf '%s\n' "${plan}" | grep -q '^Remv '; then
-	log "отменено — в плане apt есть удаление пакетов:"
-	printf '%s\n' "${plan}" | grep '^Remv '
-	log "разберитесь и выполните вручную: apt-get install $*"
-	exit 0
-fi
+	# apt may still be finishing the transaction that removed the package.
+	attempt=0
+	while [ "${attempt}" -lt 10 ]; do
+		attempt=$((attempt + 1))
+		if LC_ALL=C apt-get -s install "$@" >/dev/null 2>&1; then
+			break
+		fi
+		sleep 3
+	done
 
-log "восстанавливаю: $*"
-if LC_ALL=C apt-get -y install "$@"; then
-	log "готово"
-	rm -f "${list}" "${self}"
-	rmdir "${state_dir}" 2>/dev/null
-else
-	log "не удалось; восстановите вручную: apt-get install $*"
-fi
+	if ! plan=$(LC_ALL=C apt-get -s install "$@" 2>&1); then
+		log "apt не смог построить план восстановления:"
+		printf '%s\n' "${plan}"
+		log "восстановите вручную: apt-get install $*"
+		return 0
+	fi
+
+	# An automatic restore must never remove anything: if apt's plan touches
+	# other packages, stop and leave the decision to a human.
+	if printf '%s\n' "${plan}" | grep -q '^Remv '; then
+		log "отменено — в плане apt есть удаление пакетов:"
+		printf '%s\n' "${plan}" | grep '^Remv '
+		log "разберитесь и выполните вручную: apt-get install $*"
+		return 0
+	fi
+
+	log "восстанавливаю: $*"
+	if LC_ALL=C apt-get -y install "$@"; then
+		log "готово"
+		rm -f "${list}" "${self}"
+		rmdir "${state_dir}" 2>/dev/null
+	else
+		log "не удалось; восстановите вручную: apt-get install $*"
+	fi
+}
+
+mode=${1:-}
+case "${mode}" in
+consumers)
+	consumers
+	;;
+restore)
+	shift
+	restore "$@"
+	;;
+*)
+	echo "usage: ${0##*/} consumers | restore PKG..." >&2
+	exit 2
+	;;
+esac
