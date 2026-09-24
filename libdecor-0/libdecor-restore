@@ -1,0 +1,79 @@
+#!/bin/sh
+# Deferred restore of the ALT libdecor after this Freshlibs package has been
+# removed.
+#
+# Started by the package's %postun through a transient systemd unit, because an
+# rpm scriptlet runs inside the rpm transaction and holds the rpm database
+# lock: apt cannot be called from there at all. By the time this runs the
+# transaction is over and apt is usable again.
+#
+# Package names to restore are passed as arguments. The script lives in
+# /var/lib/freshlibs because the package's own files are already gone.
+set -u
+
+state_dir=/var/lib/freshlibs
+list=${state_dir}/libdecor-restore.list
+self=${state_dir}/libdecor-restore
+
+log() { echo "Freshlibs libdecor-restore: $*"; }
+
+if [ "$#" -eq 0 ]; then
+	log "нечего восстанавливать"
+	exit 0
+fi
+
+# Drop whatever survived the removal. This check belongs here and not in the
+# %postun that scheduled this run: inside an rpm transaction the erase order is
+# undefined, so a package apt was about to remove could still look installed.
+wanted=""
+for pkg in "$@"; do
+	if rpm -q "${pkg}" >/dev/null 2>&1; then
+		continue
+	fi
+	wanted="${wanted}${pkg} "
+done
+
+if [ -z "${wanted}" ]; then
+	log "все пакеты на месте, восстанавливать нечего"
+	rm -f "${list}" "${self}"
+	rmdir "${state_dir}" 2>/dev/null
+	exit 0
+fi
+
+# shellcheck disable=SC2086 # deliberate word splitting of the package list
+set -- ${wanted}
+
+# apt may still be finishing the transaction that removed the package.
+attempt=0
+while [ "${attempt}" -lt 10 ]; do
+	attempt=$((attempt + 1))
+	if LC_ALL=C apt-get -s install "$@" >/dev/null 2>&1; then
+		break
+	fi
+	sleep 3
+done
+
+if ! plan=$(LC_ALL=C apt-get -s install "$@" 2>&1); then
+	log "apt не смог построить план восстановления:"
+	printf '%s\n' "${plan}"
+	log "восстановите вручную: apt-get install $*"
+	exit 0
+fi
+
+# An automatic restore must never remove anything: if apt's plan touches other
+# packages, stop and leave the decision to a human.
+if printf '%s\n' "${plan}" | grep -q '^Remv '; then
+	log "отменено — в плане apt есть удаление пакетов:"
+	printf '%s\n' "${plan}" | grep '^Remv '
+	log "разберитесь и выполните вручную: apt-get install $*"
+	exit 0
+fi
+
+log "восстанавливаю: $*"
+if LC_ALL=C apt-get -y install "$@"; then
+	log "готово"
+	rm -f "${list}" "${self}"
+	rmdir "${state_dir}" 2>/dev/null
+else
+	log "не удалось; восстановите вручную: apt-get install $*"
+fi

@@ -17,7 +17,7 @@
 # Stapler repository documentation requires.
 name='libdecor-0'
 version=0.2.5
-release=2
+release=3
 # epoch guards our own upgrade path: any future release of this recipe
 # always sorts above a 0.x version published without an epoch. It does
 # NOT stop `apt-get upgrade` from pulling the system libdecor-0 back —
@@ -99,13 +99,30 @@ build_deps_altlinux=(
 )
 build_deps=("${build_deps_altlinux[@]}")
 
-sources=("https://gitlab.freedesktop.org/libdecor/libdecor/-/archive/${version}/libdecor-${version}.tar.gz")
-checksums=('sha256:39c109a9a7eae943ba34d18a282c447d5729f9c486c8bc05ea305e4acd341522')
+# The second entry is the restore helper kept next to this script; Stapler has
+# no variable for the recipe directory, so it comes in as a local source.
+sources=(
+	"https://gitlab.freedesktop.org/libdecor/libdecor/-/archive/${version}/libdecor-${version}.tar.gz"
+	'local:///libdecor-restore'
+)
 
-# postinstall -> RPM %post, postremove -> RPM %postun. Both are about telling
-# the user what changed: ALT's rpm already runs ldconfig for library packages
-# on its own, so the scripts call it only as an idempotent safety net.
+checksums=(
+	'sha256:39c109a9a7eae943ba34d18a282c447d5729f9c486c8bc05ea305e4acd341522'
+	'sha256:22d0aa002246cfe607af0c38a19c2f5027deff3669aa0b3b0b3f9bf4f494069e'
+)
+
+# preremove -> %preun, postinstall -> %post, postremove -> %postun.
+#
+# ALT's rpm already runs ldconfig for library packages on its own, so these
+# scripts are not about the loader cache. They exist because this package
+# replaces a base-system library: `apt-get remove` on it takes down everything
+# that needs libdecor (on p11: mesa-gears and xorg-xwayland directly, then
+# gnome-session-wayland and i586-steam through xorg-xwayland). %preun records
+# that set while the rpm database still has it, and %postun hands the restore
+# to a transient systemd unit — an rpm scriptlet holds the rpm database lock
+# and cannot call apt itself.
 scripts=(
+	['preremove']='preremove.sh'
 	['postinstall']='postinstall.sh'
 	['postremove']='postremove.sh'
 )
@@ -142,6 +159,11 @@ package() {
 	cd "${srcdir}/libdecor-${version}"
 	DESTDIR="${pkgdir}" meson install -C builddir --no-rebuild
 	install-license LICENSE 'libdecor-0/LICENSE'
+
+	# Used by %postun after this package's own files are already gone, so
+	# %preun copies it to /var/lib/freshlibs first.
+	install -Dm755 "${srcdir}/libdecor-restore" \
+		"${pkgdir}/usr/libexec/freshlibs/libdecor-restore"
 }
 
 files() {
@@ -154,6 +176,8 @@ files() {
 	files-find "/usr/lib*/pkgconfig/libdecor-0.pc"
 	files-find "/usr/include/libdecor-0"
 	files-find "/usr/include/libdecor-0/*.h"
+	files-find "/usr/libexec/freshlibs"
+	files-find "/usr/libexec/freshlibs/libdecor-restore"
 	# No files-find-binary: demo/install_demo are off, so the package
 	# installs no executables and the helper would abort the build on an
 	# empty /usr/bin.
