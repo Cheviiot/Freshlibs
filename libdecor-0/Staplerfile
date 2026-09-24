@@ -1,0 +1,152 @@
+# libdecor for ALT Linux p11.
+#
+# p11 ships libdecor 0.1.1 (2023) as the binary packages `libdecor-0`
+# (runtime + cairo plugin) and `libdecor-devel` (headers, .pc, .so
+# symlink); `libdecor` is only the name of the source package, so the
+# package built here is named `libdecor-0` to line up with the system
+# name it displaces. Upstream 0.2.5 keeps soname libdecor-0.so.0 (see
+# libdecor_soversion in meson.build), so it is a drop-in ABI-compatible
+# replacement, and it also builds the GTK plugin that p11 never shipped
+# — which is what makes SDL3/Wayland windows get proper GNOME-styled
+# client-side decorations instead of the cairo fallback.
+#
+# Runtime + devel content is deliberately in one package: the system
+# libdecor-devel owns the same headers/.pc/.so paths, so it has to be
+# replaced rather than kept alongside.
+# The directory holding this script is named after `name`, as the
+# Stapler repository documentation requires.
+name='libdecor-0'
+version=0.2.5
+release=1
+# epoch guards our own upgrade path: any future release of this recipe
+# always sorts above a 0.x version published without an epoch. It does
+# NOT stop `apt-get upgrade` from pulling the system libdecor-0 back —
+# the installed package is called libdecor-0+stplr-<repo>, a different
+# name to apt. The rollback protection comes from the provides/
+# conflicts/replaces triple below.
+epoch=1
+
+group='System/Libraries'
+summary='Client-side window decorations library for Wayland (cairo + GTK plugins)'
+summary_ru='Библиотека клиентских оконных декораций для Wayland (плагины cairo и GTK)'
+desc='libdecor is a library that can help Wayland clients draw window decorations for them. It aims to provide multiple backends that implement the decoration drawing. This build tracks upstream 0.2.5 and ships both the cairo and the GTK plugin, so GTK/GNOME-styled decorations are available to plain Wayland clients such as SDL3 applications.'
+desc_ru='libdecor — библиотека, которая рисует оконные декорации за Wayland-клиента. Она поддерживает несколько бэкендов отрисовки декораций. Эта сборка соответствует upstream-версии 0.2.5 и содержит оба плагина — cairo и GTK, поэтому декорации в стиле GTK/GNOME доступны обычным Wayland-клиентам, в том числе приложениям на SDL3.'
+homepage='https://gitlab.freedesktop.org/libdecor/libdecor'
+maintainer='Cheviiot <Cheviiot@users.noreply.github.com>'
+
+license=('MIT')
+
+architectures=('amd64' 'arm64')
+# The recipe hardcodes ALT package names for build_deps and relies on
+# the ALT rpm reqprov helpers, so it is not portable as written.
+compatible_with=('altlinux')
+
+# Obsoletes: takes over the system packages instead of colliding with
+# them on /usr/lib64/libdecor-0.so.0, the headers and the .pc file.
+# `libdecor-cairo` / `libdecor-gtk` are the split plugin package names
+# used by other distributions; p11 has no such packages, they are listed
+# so the recipe stays correct if it is ever reused elsewhere.
+replaces=('libdecor-0' 'libdecor-devel' 'libdecor' 'libdecor-cairo' 'libdecor-gtk')
+
+# Stapler already emits Conflicts/Provides for `name` itself, so only the
+# devel package has to be declared here.
+conflicts=('libdecor-devel')
+
+# Stapler adds the bare `libdecor-0` provide by itself; the versioned
+# entries are here so a dependency such as `libdecor-devel >= 0.2` can
+# be satisfied as well, and the plain names cover unversioned ones. The
+# release is intentionally left off: it differs per distribution.
+provides=(
+	'libdecor'
+	"libdecor = ${epoch}:${version}"
+	"libdecor-0 = ${epoch}:${version}"
+	'libdecor-devel'
+	"libdecor-devel = ${epoch}:${version}"
+	'libdecor-cairo'
+	"libdecor-cairo = ${epoch}:${version}"
+	'libdecor-gtk'
+	"libdecor-gtk = ${epoch}:${version}"
+)
+
+# ALT's own /usr/lib/rpm/find-{provides,requires} (from rpm-build) give
+# the set-version provides that p11 packages depend on, e.g.
+# `libdecor-0.so.0()(64bit) >= set:...`; the generic "dirty" finder does
+# not, and a libdecor without those provides cannot satisfy the existing
+# reverse dependencies in p11.
+auto_reqprov_method='rpm'
+auto_req=1
+auto_prov=1
+
+deps=()
+
+build_deps_altlinux=(
+	'meson'
+	'ninja-build'
+	'gcc'
+	'pkg-config'
+	'rpm-build'
+	# wayland-devel carries wayland-scanner; the client/cursor libraries
+	# live in their own -devel packages on ALT (there is no
+	# libwayland-devel in p11).
+	'wayland-devel'
+	'libwayland-client-devel'
+	'libwayland-cursor-devel'
+	'wayland-protocols'
+	'libcairo-devel'
+	'libpango-devel'
+	'libgtk+3-devel'
+	'libdbus-devel'
+)
+build_deps=("${build_deps_altlinux[@]}")
+
+sources=("https://gitlab.freedesktop.org/libdecor/libdecor/-/archive/${version}/libdecor-${version}.tar.gz")
+checksums=('sha256:39c109a9a7eae943ba34d18a282c447d5729f9c486c8bc05ea305e4acd341522')
+
+prepare() {
+	cd "${srcdir}/libdecor-${version}"
+
+	# ALT keeps /usr/lib64 as a real directory for 64-bit libraries on
+	# both x86_64 and aarch64, and pkg-config only looks in
+	# /usr/lib64/pkgconfig:/usr/share/pkgconfig there — installing into
+	# /usr/lib would make the library invisible to both ld.so and
+	# pkg-config.
+	_libdir='/usr/lib'
+	if [ -d /usr/lib64 ] && [ ! -L /usr/lib64 ]; then
+		_libdir='/usr/lib64'
+	fi
+
+	meson setup builddir \
+		--prefix=/usr \
+		--libdir="${_libdir}" \
+		--buildtype=release \
+		-Ddemo=false \
+		-Dinstall_demo=false \
+		-Ddbus=enabled \
+		-Dgtk=enabled
+}
+
+build() {
+	cd "${srcdir}/libdecor-${version}"
+	meson compile -C builddir
+}
+
+package() {
+	cd "${srcdir}/libdecor-${version}"
+	DESTDIR="${pkgdir}" meson install -C builddir --no-rebuild
+	install-license LICENSE 'libdecor-0/LICENSE'
+}
+
+files() {
+	files-find-license
+	# lib* rather than lib64 so the list follows whatever prepare() picked.
+	files-find "/usr/lib*/libdecor-0.so*"
+	files-find "/usr/lib*/libdecor"
+	files-find "/usr/lib*/libdecor/plugins-1"
+	files-find "/usr/lib*/libdecor/plugins-1/*.so"
+	files-find "/usr/lib*/pkgconfig/libdecor-0.pc"
+	files-find "/usr/include/libdecor-0"
+	files-find "/usr/include/libdecor-0/*.h"
+	# No files-find-binary: demo/install_demo are off, so the package
+	# installs no executables and the helper would abort the build on an
+	# empty /usr/bin.
+}

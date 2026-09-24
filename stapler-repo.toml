@@ -1,0 +1,15 @@
+[repo]
+minVersion = "v0.1.1"
+
+title = "Freshlibs"
+summary = "Свежие системные библиотеки для ALT Linux p11"
+description = """
+Freshlibs содержит рецепты Stapler для системных библиотек,
+которые в ALT Linux p11 отсутствуют или заметно устарели.
+Пакеты собираются из upstream-исходников и вытесняют системные
+одноимённые пакеты, оставаясь совместимыми по ABI."""
+homepage = "https://github.com/Cheviiot/Freshlibs"
+
+url = "https://github.com/Cheviiot/Freshlibs.git"
+ref = "main"
+report_url = "https://github.com/Cheviiot/Freshlibs/issues/new?title={{ .BasePackageName }}"
