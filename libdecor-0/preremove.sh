@@ -76,11 +76,19 @@ if [ -r "${helper}" ]; then
 	cp -f "${helper}" "${runner}" 2>/dev/null && chmod 755 "${runner}" 2>/dev/null
 fi
 
+# The closure is bounded (45 packages worst case across all of p11), but that
+# is still too much to print; show a handful and point at the file.
+count=$(printf '%s\n' ${merged} | grep -c .)
+shown=$(printf '%s\n' ${merged} | head -8 | tr '\n' ' ')
+if [ "${count}" -gt 8 ]; then
+	shown="${shown}… и ещё $((count - 8))"
+fi
+
 cat <<MSG
 Freshlibs: этот пакет заменяет системный libdecor, поэтому его удаление
 оставляет систему без libdecor вообще. После завершения операции будут
-восстановлены системные пакеты:
-    ${merged}
+восстановлены системные пакеты (${count}), список в ${list}:
+    ${shown}
 Вернуться на системную версию без этого круга можно одной командой —
 она делает обмен в одной транзакции и ничего не ломает:
     apt-get install libdecor-0 libdecor-devel

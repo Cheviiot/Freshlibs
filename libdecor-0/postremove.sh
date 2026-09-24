@@ -57,6 +57,23 @@ if [ -z "${pkgs}" ]; then
 	exit 0
 fi
 
+# Safety valve on the size of the automatic transaction. Measured envelope for
+# libdecor on ALT p11: the reverse-dependency closure over the whole repository
+# — every package of p11 installed at once — is 45 packages over 6 levels, and
+# only 5 packages depend on the soname directly. A list well past that means
+# something this recipe was never measured against (third-party repositories
+# with their own libdecor consumers), so the restore stops being automatic and
+# hands the decision over instead of running a huge apt transaction unattended.
+restore_limit=60
+pkg_count=$(printf '%s\n' ${pkgs} | grep -c .)
+
+if [ "${pkg_count}" -gt "${restore_limit}" ]; then
+	echo "Freshlibs: восстановление затронуло бы пакетов: ${pkg_count} (порог ${restore_limit}) — автоматически не делаю." >&2
+	echo "Freshlibs: список в ${list}, проверьте и выполните вручную:" >&2
+	echo "    apt-get install \$(cat ${list})" >&2
+	exit 0
+fi
+
 # This scriptlet runs inside the rpm transaction and holds the rpm database
 # lock, so it cannot call apt itself. The restore is handed to a transient
 # systemd unit that starts after the transaction is over.
