@@ -17,7 +17,7 @@
 # Stapler repository documentation requires.
 name='libdecor-0'
 version=0.2.5
-release=1
+release=2
 # epoch guards our own upgrade path: any future release of this recipe
 # always sorts above a 0.x version published without an epoch. It does
 # NOT stop `apt-get upgrade` from pulling the system libdecor-0 back —
@@ -101,6 +101,14 @@ build_deps=("${build_deps_altlinux[@]}")
 
 sources=("https://gitlab.freedesktop.org/libdecor/libdecor/-/archive/${version}/libdecor-${version}.tar.gz")
 checksums=('sha256:39c109a9a7eae943ba34d18a282c447d5729f9c486c8bc05ea305e4acd341522')
+
+# postinstall -> RPM %post, postremove -> RPM %postun. Both are about telling
+# the user what changed: ALT's rpm already runs ldconfig for library packages
+# on its own, so the scripts call it only as an idempotent safety net.
+scripts=(
+	['postinstall']='postinstall.sh'
+	['postremove']='postremove.sh'
+)
 
 prepare() {
 	cd "${srcdir}/libdecor-${version}"
